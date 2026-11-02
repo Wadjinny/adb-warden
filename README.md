@@ -8,7 +8,37 @@ pairing code.
 - `android/` — the ADB Warden app (Kotlin, Jetpack Compose, Android 11+).
 - `docs/PROTOCOL.md` — architecture and the phone ↔ proxy protocol. `docs/FEATURES.md` — MVP and later features.
 
-## Quick start
+## Install from a release (no build)
+
+Each [release](https://github.com/Wadjinny/adb-warden/releases) has the signed app (`adb-warden-<version>.apk`) and
+the MCP proxy package (`adb-warden-<version>.tgz`).
+
+**Phone** (Android 11+): turn on Developer options and Wireless debugging, then install the APK
+([latest](https://github.com/Wadjinny/adb-warden/releases/latest/download/adb-warden.apk)). Open it and grant
+notifications and "Display over other apps" from the Setup tab.
+
+**Computer** (Node.js 20+ and `adb` from Android platform-tools, on the same Wi-Fi as the phone). Replace
+`<version>` with the release version, e.g. `0.2.0`:
+
+```sh
+PKG=https://github.com/Wadjinny/adb-warden/releases/download/v<version>/adb-warden-<version>.tgz
+npx -y --package=$PKG adb-warden link <code>     # code from the app: Setup → Link a computer
+claude mcp add adb-warden -- npx -y --package=$PKG adb-warden serve
+```
+
+## Releasing
+
+Push a version tag; CI builds, signs and attaches both files to a GitHub release:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The version comes from the tag. Signing uses the repository secrets `ADBWARDEN_KEYSTORE_BASE64`,
+`ADBWARDEN_KEYSTORE_PASSWORD`, `ADBWARDEN_KEY_ALIAS` and `ADBWARDEN_KEY_PASSWORD`. Local release builds use
+`~/.android-keys/adb-warden-release.properties` if it exists, otherwise the debug key.
+
+## Build from source
 
 1. Build and install the app:
    ```sh
