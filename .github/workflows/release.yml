@@ -1,10 +1,11 @@
 name: Build and release
 
 # Push a tag like v0.2.0 to build the signed APK and the MCP proxy package and attach both to a GitHub release.
-# "Run workflow" (manual) builds the same files as downloadable workflow artifacts without making a release.
+# Pull requests and "Run workflow" (manual) build the same files as workflow artifacts without making a release.
 on:
   push:
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
