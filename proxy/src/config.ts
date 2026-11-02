@@ -4,7 +4,15 @@ import path from "node:path";
 
 export const SELF_PACKAGE = "com.wadjinny.adbwarden";
 export const DEFAULT_PORT = 47800;
-export const VERSION = "0.1.0";
+/** Read from package.json (dist/config.js → ../package.json) so release builds report the tagged version. */
+export const VERSION: string = (() => {
+  try {
+    const pkg = new URL("../package.json", import.meta.url);
+    return String(JSON.parse(fs.readFileSync(pkg, "utf8")).version || "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+})();
 export const CLIENT_ID = `adb-warden-proxy/${VERSION}`;
 
 export interface Config {
