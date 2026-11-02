@@ -44,6 +44,8 @@ jobs:
           npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
           npm run build
           npm pack --pack-destination "$RUNNER_TEMP/out"
+          # Stable name for the "latest" download link.
+          cp "$RUNNER_TEMP/out/adb-warden-${{ steps.version.outputs.version }}.tgz" "$RUNNER_TEMP/out/adb-warden.tgz"
 
       # ---------- Android app ----------
       - uses: actions/setup-java@v4
@@ -105,17 +107,17 @@ jobs:
           cat > "$RUNNER_TEMP/notes.md" <<EOF
           ## Install
 
-          **Phone (Android 11+):** download \`adb-warden-$V.apk\` below and open it on the phone.
+          **Phone (Android 11+):** download \`adb-warden-$V.apk\` below and open it on the phone, then grant notifications and "Display over other apps" in the app's Setup tab.
 
           **Computer (Node.js 20+ and adb):** no clone needed.
 
           \`\`\`sh
-          # link once (code from the app: Setup → Link a computer)
-          npx -y --package=https://github.com/$REPO/releases/download/$GITHUB_REF_NAME/adb-warden-$V.tgz adb-warden link <code>
-
-          # add it to Claude Code
-          claude mcp add adb-warden -- npx -y --package=https://github.com/$REPO/releases/download/$GITHUB_REF_NAME/adb-warden-$V.tgz adb-warden serve
+          npm install -g https://github.com/$REPO/releases/download/$GITHUB_REF_NAME/adb-warden-$V.tgz
+          adb-warden link <code>        # code from the app: Setup → Link a computer
+          claude mcp add adb-warden -- adb-warden serve
           \`\`\`
+
+          Full instructions: https://github.com/$REPO#install
           EOF
           gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/out/* \
             --repo "$REPO" --title "ADB Warden $V" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
