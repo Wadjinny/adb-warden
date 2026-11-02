@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.gradle/
+build/
+local.properties
+*.apk
+dist-test/
+.kotlin/
+.idea/
+*.iml
+*.jks
+*.keystore
+captures/
+.DS_Store
+npm-debug.log*
+
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+id_rsa
+id_rsa.dsa
+credentials.json
