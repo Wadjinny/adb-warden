@@ -130,6 +130,15 @@ moves to `/var/log/adb-warden/audit.jsonl` (readable, not writable, by you).
 Limits: the install moment is as trustworthy as your account (install while no agent runs); agents must not
 have passwordless sudo; updates need the password again.
 
+### Installing APKs the server cannot see
+
+The daemon cannot read your home directory or `/tmp` (systemd sandbox), and the MCP server may even run on a
+different machine than the files an agent is working with. When `install_app` gets such a path, the error
+explains visibility instead of just "No such file": it names `/dev/shm/adb-warden` (created by adb-warden where
+it runs, shared memory that the sandbox keeps accessible) and gives the copy-and-install recipe. `status` shows
+the same staging directory while the Install category is on, so agents can stage the APK before the first
+failure.
+
 ## Security notes
 
 - Rules are enforced by the proxy. If the agent can also run `adb` directly on the computer, it can bypass them.

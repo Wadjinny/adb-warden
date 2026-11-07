@@ -11,6 +11,7 @@
 6. Pairing: asks the phone for the wireless-debugging code instead of the agent.
 7. Audit log on the computer (`audit.jsonl`) + `adb-warden log` command.
 8. `adb-warden link <code>` one-time linking (mDNS discovery of the phone).
+9. Visibility-aware installs: an APK staging directory (`/dev/shm/adb-warden`) created by adb-warden where it runs, actionable `install_app` errors when a path is invisible to the server (sandboxed daemon / different host), and a staging hint in `status`. screen/input tools take an extra `settleMs` to ride out UI transitions without a screenshot race.
 
 ### Phone app
 1. Consent prompt (full-screen dialog + heads-up notification): agent, computer, reason, what the rules allow — Allow / Deny, 60 s timeout.

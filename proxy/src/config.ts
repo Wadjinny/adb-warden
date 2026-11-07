@@ -75,6 +75,11 @@ export function adbPath(): string {
   return process.env.ADB_WARDEN_ADB || "adb";
 }
 
+/** Running inside the secure-mode daemon (sandboxed system user): tools can tailor their hints. */
+export function isSecureDaemon(): boolean {
+  return !!process.env.ADB_WARDEN_SOCKET;
+}
+
 /** Logging for serve mode: stdout is the MCP channel, so everything goes to stderr. */
 export function logErr(...args: unknown[]): void {
   process.stderr.write(`[adb-warden] ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}\n`);

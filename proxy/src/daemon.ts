@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { linkPhone, statusReport, unlinkPhone } from "./admin.js";
 import { logErr } from "./config.js";
 import { buildMcpServer } from "./mcp.js";
-import { createShared } from "./tools.js";
+import { createShared, stageDir } from "./tools.js";
 
 /**
  * Secure-mode daemon. Runs as the `adbwarden` system user, owns the only adb key the phone trusts and a
@@ -21,8 +21,13 @@ export const DEFAULT_SOCKET = "/run/adb-warden/api.sock";
 
 export async function runDaemon(): Promise<void> {
   const socketPath = process.env.ADB_WARDEN_SOCKET || DEFAULT_SOCKET;
+  // Let the tools know they run under the secure daemon (e.g. install_app's staging hints).
+  process.env.ADB_WARDEN_SOCKET ||= socketPath;
   const shared = createShared();
   let clients = 0;
+
+  // Create the APK staging area now so the daemon user owns it and any agent can copy files into it.
+  stageDir();
 
   fs.mkdirSync(path.dirname(socketPath), { recursive: true });
   try { fs.unlinkSync(socketPath); } catch { /* not there */ }

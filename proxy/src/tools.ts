@@ -9,7 +9,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { adb, adbRaw, DeviceManager, shellArgs } from "./adb.js";
 import { BridgeConnection, BridgeManager } from "./bridge.js";
-import { logErr, SELF_PACKAGE, VERSION } from "./config.js";
+import { isSecureDaemon, logErr, SELF_PACKAGE, VERSION } from "./config.js";
 import { checkCategory, checkPackage, denial, PACKAGE_RE, Policy } from "./policy.js";
 import { ActiveSession, SessionDenied, SessionManager } from "./session.js";
 import { checkReadonlyShell, mentionsSelf } from "./shell-policy.js";
@@ -26,6 +26,50 @@ function resultText(r: CallToolResult): string {
 function clip(s: string, n = 60): string {
   const one = s.replace(/\s+/g, " ");
   return one.length > n ? one.slice(0, n - 1) + "…" : one;
+}
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const SHM = "/dev/shm";
+/** Where files can be staged so adb-warden can read them (see stageDir). */
+let stageDirCache: string | null | undefined;
+
+/**
+ * Staging directory for files agents want adb-warden to see. The secure-mode daemon sandbox hides /home and
+ * /tmp (ProtectHome, PrivateTmp), but the shared-memory tmpfs stays visible, so a world-writable staging
+ * directory is created in it. Returns null when nothing shared is available.
+ */
+export function stageDir(): string | null {
+  if (stageDirCache !== undefined) return stageDirCache;
+  let result: string | null = null;
+  for (const candidate of [path.join(SHM, "adb-warden"), SHM]) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      try { fs.chmodSync(candidate, 0o1777); } catch { /* owned by another user */ }
+      fs.accessSync(candidate, fs.constants.W_OK | fs.constants.R_OK);
+      result = candidate;
+      break;
+    } catch {
+      // not usable here (missing or read-only /dev/shm, ...) — try the next candidate
+    }
+  }
+  stageDirCache = result;
+  return result;
+}
+
+/** Error for a path invisible to this process: the sandboxed daemon, or the MCP server on another host. */
+export function missingApkMessage(
+  abs: string,
+  opts: { secureDaemon: boolean; stage: string | null } = { secureDaemon: isSecureDaemon(), stage: stageDir() },
+): string {
+  const name = path.basename(abs);
+  const cause = opts.secureDaemon
+    ? "this ADB Warden runs as its own daemon user in a hardened sandbox: paths under /home, /tmp and /var/tmp are invisible to it, even though they exist on your side"
+    : "the ADB Warden server may run on a different machine or container that cannot see your filesystem — or the path itself may be wrong";
+  const recipe = opts.stage
+    ? `Copy the APK where ADB Warden can read it, then call install_app on the copy:\n  cp ${abs} ${opts.stage}/\n  install_app ${opts.stage}/${name}`
+    : "Copy the APK to a location ADB Warden can read (no shared staging directory is writable here), then call install_app on the copy.";
+  return `No such file: ${abs}\nUsually the file exists but is invisible to ADB Warden: ${cause}.\n${recipe}`;
 }
 
 export function describePolicy(p: Policy): string {
@@ -175,7 +219,7 @@ export function registerTools(server: McpServer, ctx: Context): void {
     let fg = await devices.foreground(serial).catch(() => null);
     // Right after approval the consent screen may still be closing; wait for the app underneath.
     for (let i = 0; i < 4 && fg?.pkg === SELF_PACKAGE; i++) {
-      await new Promise((r) => setTimeout(r, 500));
+      await wait(500);
       fg = await devices.foreground(serial).catch(() => null);
     }
     if (s.startApp !== undefined) return;
@@ -274,6 +318,14 @@ export function registerTools(server: McpServer, ctx: Context): void {
         lines.push(`phone app: connected to ${conn.hello?.deviceName || "phone"} at ${conn.host}:${conn.port}`);
         lines.push(`phone IPs: ${conn.device?.ips.join(", ") || "none"}`);
         lines.push(`rules: ${describePolicy(conn.policy)}`);
+        if (conn.policy.install) {
+          const dir = stageDir();
+          lines.push(
+            dir
+              ? `APK staging: when your APK path is invisible here (daemon sandbox or another host), copy it to ${dir}/ and install the copy`
+              : "APK staging: no shared staging directory is writable here (/dev/shm unavailable)",
+          );
+        }
         try {
           lines.push(`adb device: ${await devices.ensure(conn.device?.ips ?? [], false)}`);
         } catch (e) {
@@ -292,9 +344,22 @@ export function registerTools(server: McpServer, ctx: Context): void {
 
   server.registerTool(
     "screenshot",
-    { description: "Take a screenshot of the phone (JPEG, long side up to 1568 px; the reply says how to map image coordinates to screen coordinates).", inputSchema: {} },
-    async () =>
-      guarded("screenshot", "Screenshot", { foreground: true }, async (serial) => {
+    {
+      description:
+        "Take a screenshot of the phone (JPEG, long side up to 1568 px; the reply says how to map image coordinates to screen coordinates).",
+      inputSchema: {
+        settleMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(10_000)
+          .optional()
+          .describe("Wait this long before capturing. Use it right after a tap — an immediate screenshot often catches a mid-transition frame"),
+      },
+    },
+    async ({ settleMs }) =>
+      guarded("screenshot", settleMs ? `Screenshot after ${settleMs} ms` : "Screenshot", { foreground: true }, async (serial) => {
+        if (settleMs) await wait(settleMs);
         const r = await adbRaw(["-s", serial, "exec-out", "screencap", "-p"], { timeoutMs: 20_000, maxBytes: 30 * 1024 * 1024 });
         if (r.timedOut) return fail("screencap timed out");
         if (r.truncated) return fail("screenshot too large");
@@ -319,24 +384,39 @@ export function registerTools(server: McpServer, ctx: Context): void {
     {
       description:
         "List the elements on screen (text, resource id, description, tap center, flags). Cheaper than a screenshot; use the center coordinates with tap. raw=true returns the unfiltered uiautomator XML (for debugging what an app exposes).",
-      inputSchema: { raw: z.boolean().optional().describe("Return the raw uiautomator XML instead of the compact list") },
+      inputSchema: {
+        raw: z.boolean().optional().describe("Return the raw uiautomator XML instead of the compact list"),
+        settleMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(10_000)
+          .optional()
+          .describe("Wait this long before dumping. A dump taken during an animation can fail or miss elements"),
+      },
     },
-    async ({ raw }) =>
-      guarded("ui_tree", raw ? "Read raw screen XML" : "Read screen elements", { foreground: true }, async (serial) => {
-        const out = await adb(
-          shellArgs(serial, "uiautomator dump /sdcard/adbw_ui.xml >/dev/null 2>&1; cat /sdcard/adbw_ui.xml; rm -f /sdcard/adbw_ui.xml"),
-          { timeoutMs: 30_000, maxBytes: 5 * 1024 * 1024, allowFail: true },
-        );
-        if (!out.includes("<hierarchy")) return fail(`uiautomator dump failed${out.trim() ? `: ${clip(out.trim(), 200)}` : " (the screen may be animating; try again)"}`);
-        if (raw) {
-          const xml = out.slice(out.indexOf("<?xml") >= 0 ? out.indexOf("<?xml") : out.indexOf("<hierarchy"));
-          return text(xml.length > 200_000 ? xml.slice(0, 200_000) + "\n(truncated at 200 KB)" : xml);
-        }
-        const nodes = parseUiNodes(out).filter((n) => n.pkg !== SELF_PACKAGE);
-        const fg = await devices.foreground(serial);
-        const header = `foreground: ${fg ? `${fg.pkg}/${fg.activity}` : "unknown"}`;
-        return text(nodes.length ? `${header}\n${nodes.map((n, i) => formatUiNode({ ...n, index: i + 1 })).join("\n")}` : `${header}\n(no interesting elements on screen)`);
-      }),
+    async ({ raw, settleMs }) =>
+      guarded(
+        "ui_tree",
+        `${raw ? "Read raw screen XML" : "Read screen elements"}${settleMs ? ` after ${settleMs} ms` : ""}`,
+        { foreground: true },
+        async (serial) => {
+          if (settleMs) await wait(settleMs);
+          const out = await adb(
+            shellArgs(serial, "uiautomator dump /sdcard/adbw_ui.xml >/dev/null 2>&1; cat /sdcard/adbw_ui.xml; rm -f /sdcard/adbw_ui.xml"),
+            { timeoutMs: 30_000, maxBytes: 5 * 1024 * 1024, allowFail: true },
+          );
+          if (!out.includes("<hierarchy")) return fail(`uiautomator dump failed${out.trim() ? `: ${clip(out.trim(), 200)}` : " (the screen may be animating; try again)"}`);
+          if (raw) {
+            const xml = out.slice(out.indexOf("<?xml") >= 0 ? out.indexOf("<?xml") : out.indexOf("<hierarchy"));
+            return text(xml.length > 200_000 ? xml.slice(0, 200_000) + "\n(truncated at 200 KB)" : xml);
+          }
+          const nodes = parseUiNodes(out).filter((n) => n.pkg !== SELF_PACKAGE);
+          const fg = await devices.foreground(serial);
+          const header = `foreground: ${fg ? `${fg.pkg}/${fg.activity}` : "unknown"}`;
+          return text(nodes.length ? `${header}\n${nodes.map((n, i) => formatUiNode({ ...n, index: i + 1 })).join("\n")}` : `${header}\n(no interesting elements on screen)`);
+        },
+      ),
   );
 
   server.registerTool(
@@ -370,7 +450,8 @@ export function registerTools(server: McpServer, ctx: Context): void {
   server.registerTool(
     "swipe",
     {
-      description: "Swipe from (x1,y1) to (x2,y2). Swipe up (y2 < y1) to scroll down a list.",
+      description:
+        "Swipe from (x1,y1) to (x2,y2). Swipe up (y2 < y1) to scroll down a list. Start and end at least ~60 px from the screen edges: inside the edge zone a swipe trips the system back gesture instead.",
       inputSchema: { x1: coord, y1: coord, x2: coord, y2: coord, durationMs: z.number().int().min(50).max(10_000).optional().describe("default 300") },
     },
     async ({ x1, y1, x2, y2, durationMs }) =>
@@ -445,11 +526,22 @@ export function registerTools(server: McpServer, ctx: Context): void {
 
   server.registerTool(
     "install_app",
-    { description: "Install (or update) an APK from a path on this computer.", inputSchema: { apkPath: z.string().min(1) } },
+    {
+      description:
+        "Install (or update) an APK from a path on this computer. The file must be readable by adb-warden: when your own paths cannot be seen here (secure-mode sandbox or MCP server on another host), the error names a staging directory to copy the APK to.",
+      inputSchema: { apkPath: z.string().min(1) },
+    },
     async ({ apkPath }) => {
       const abs = path.resolve(apkPath);
       return guarded("install_app", `Install ${path.basename(abs)}`, {}, async (serial) => {
-        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return fail(`No such file: ${abs}`);
+        let st: fs.Stats | null = null;
+        try {
+          st = fs.statSync(abs);
+        } catch {
+          // No such file. For this process it may be invisible rather than missing — explain where to stage it.
+          return fail(missingApkMessage(abs, { secureDaemon: isSecureDaemon(), stage: stageDir() }));
+        }
+        if (!st.isFile()) return fail(`Not a file: ${abs}`);
         if (!abs.toLowerCase().endsWith(".apk")) return fail("Only .apk files can be installed");
         const out = await adb(["-s", serial, "install", "-r", abs], { timeoutMs: 300_000, allowFail: true });
         return /Success/.test(out) ? text(`Installed ${path.basename(abs)}`) : fail(`Install failed: ${clip(out.trim(), 300)}`);
@@ -463,7 +555,7 @@ export function registerTools(server: McpServer, ctx: Context): void {
     "shell",
     {
       description:
-        "Run a shell command on the phone (as the adb shell user). Depending on the owner's rules this is off, limited to read-only commands (ls, cat, dumpsys, getprop, pm list, settings get, logcat -d, … — no ; & > < $ ` ( ) \\), or unrestricted. 30 s timeout, 200 KB output.",
+        "Run a shell command on the phone (as the adb shell user). Depending on the owner's rules this is off, limited to read-only commands (ls, cat, dumpsys, getprop, pm list, settings get, logcat -d, … — no ; & > < $ ` ( ) \\), or unrestricted. 30 s timeout, 200 KB output. On many devices \"pm force-stop\" is unavailable — use \"am force-stop <package>\" instead.",
       inputSchema: { command: z.string().min(1).max(4000) },
     },
     async ({ command }) =>

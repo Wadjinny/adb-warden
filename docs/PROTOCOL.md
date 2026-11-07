@@ -136,15 +136,20 @@ uname getprop echo dumpsys "pm list" "pm path" "settings get" "wm size" "wm dens
 | `start_session {reason}` | — | Asks the phone for consent. Other tools call it implicitly (reason "(no reason given)"). |
 | `end_session {summary?}` | — | Ends the session; the phone shows the "done" notice. |
 | `status` | — | Bridge, adb device, session, and the current rules. Needs no session. |
-| `screenshot` | screen | PNG image |
-| `ui_tree` | screen | Compact list of on-screen elements with tap centers |
+| `screenshot` | screen | Image (JPEG after downscale); `settleMs?` waits that long before capturing (a shot taken right after a tap can catch a mid-transition frame) |
+| `ui_tree` | screen | Compact list of on-screen elements with tap centers; `settleMs?` waits before the dump |
 | `current_app` | screen | Foreground package/activity |
-| `tap {x,y}` / `long_press {x,y,durationMs?}` / `swipe {x1,y1,x2,y2,durationMs?}` | input | |
+| `tap {x,y}` / `long_press {x,y,durationMs?}` / `swipe {x1,y1,x2,y2,durationMs?}` | input | swipes must start and end ~60 px from the screen edges (system edge gestures) |
 | `type_text {text}` | input | ASCII via `input text` |
 | `press_key {key}` | input | back, home, recents, enter, delete, tab, escape, space, menu, search, volume_up, volume_down, dpad_* |
 | `launch_app {package}` / `list_apps {includeSystem?}` | apps | |
-| `install_app {apkPath}` | install | |
-| `shell {command}` | shell | |
+| `install_app {apkPath}` | install | Paths invisible to the server (sandboxed daemon, MCP server on another host) fail with staging guidance |
+| `shell {command}` | shell | 30 s timeout, 200 KB output |
+
+APK staging: what the agent's filesystem may not be readable by the server — the secure-mode daemon cannot see
+`/home` or `/tmp` (systemd sandbox), and the MCP server can run on a different host than the agent's files. A
+world-writable staging directory `/dev/shm/adb-warden` is created where adb-warden actually runs; when
+`install` is on, `status` names it (CLI and MCP) and `install_app` errors include the copy-and-install recipe.
 
 ## Proxy files
 

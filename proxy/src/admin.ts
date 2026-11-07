@@ -1,6 +1,6 @@
 import { BridgeConnection, BridgeError, discoverApps } from "./bridge.js";
 import { configPath, DEFAULT_PORT, deleteConfig, loadConfig, saveConfig } from "./config.js";
-import { createShared, describePolicy, Shared } from "./tools.js";
+import { createShared, describePolicy, Shared, stageDir } from "./tools.js";
 
 /** Commands that run wherever the phone link lives: in this process, or inside the secure-mode daemon. */
 export type Out = (line: string) => void;
@@ -63,6 +63,10 @@ export async function statusReport(out: Out, shared?: Shared, pair = false): Pro
     out(`Device: ${[conn.device?.manufacturer, conn.device?.model].filter(Boolean).join(" ")} Android ${conn.device?.androidVersion} (SDK ${conn.device?.sdk})`);
     out(`Phone IPs: ${conn.device?.ips.join(", ") || "none"}`);
     out(`Rules: ${describePolicy(conn.policy)}`);
+    if (conn.policy.install) {
+      const dir = stageDir();
+      if (dir) out(`Staging: ${dir} — when a file to install is invisible to adb-warden, agents copy it here first`);
+    }
     const progress = (level: string, message: string) => out(`  ${level === "info" ? "·" : level}: ${message}`);
     let paired = false;
     const watch = (_l: string, m: string) => { if (/^paired with/.test(m)) paired = true; };
