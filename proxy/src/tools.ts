@@ -543,8 +543,12 @@ export function registerTools(server: McpServer, ctx: Context): void {
         }
         if (!st.isFile()) return fail(`Not a file: ${abs}`);
         if (!abs.toLowerCase().endsWith(".apk")) return fail("Only .apk files can be installed");
-        const out = await adb(["-s", serial, "install", "-r", abs], { timeoutMs: 300_000, allowFail: true });
-        return /Success/.test(out) ? text(`Installed ${path.basename(abs)}`) : fail(`Install failed: ${clip(out.trim(), 300)}`);
+        // install reports failures on stderr ("adb: failed to install ...: INSTALL_FAILED_*"); fold it in so the
+        // message says why (downgrade, signature, offline) instead of only the "Performing Streamed Install" line.
+        const r = await adbRaw(["-s", serial, "install", "-r", abs], { timeoutMs: 300_000, maxBytes: 1024 * 1024 });
+        const out = (r.stdout.toString("utf8") + (r.stderr.trim() ? "\n" + r.stderr.trim() : "")).trim();
+        if (r.timedOut) return fail("Install timed out after 300 s");
+        return /Success/.test(out) ? text(`Installed ${path.basename(abs)}`) : fail(`Install failed: ${clip(out, 300)}`);
       });
     },
   );
