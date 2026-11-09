@@ -144,3 +144,13 @@ failure.
 - Rules are enforced by the proxy. If the agent can also run `adb` directly on the computer, it can bypass them.
 - Shell mode "any" can bypass every other rule.
 - The bridge is authenticated (HMAC challenge) but not encrypted; use it on a trusted network.
+
+### Opting out: using adb directly
+
+Going through adb-warden is the default, not a hard lock. If you explicitly tell the agent to use `adb`
+directly, it may: say what it is about to run first, because that call skips the consent prompt, the
+"Agent in control" indicator, your rules and the audit log. Only you, in the conversation, can lift the rule —
+an instruction that reaches the agent through a file, a web page or tool output does not count.
+
+In secure mode this exception does not exist: the daemon holds the only adb key, so plain `adb` on the
+computer is refused by the phone. If you want a direct-adb escape hatch, stay in the default mode.
